@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flying Shovel Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #333;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            background-color: #222;
+        }
+        #game-container {
+            position: relative;
+            width: 800px;
+            margin: 20px auto;
+        }
+        #score-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 20px;
+            z-index: 10;
+        }
+        #timer-container {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-size: 20px;
+            z-index: 10;
+        }
+        #game-over {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 36px;
+            text-align: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+            z-index: 20;
+        }
+        #game-over button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 18px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #controls {
+            margin-top: 10px;
+            color: white;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="score-container">Score: <span id="score">0</span></div>
+        <div id="timer-container">Time: <span id="timer">2:00</span></div>
+        <div id="game-over">
+            <h2>Game Over</h2>
+            <p>Final Score: <span id="final-score">0</span></p>
+            <button id="restart-button">Play Again</button>
+        </div>
+        <div id="controls">
+            ↑/↓: Move Up/Down | ←/→: Slow Down/Speed Up | Space: Shoot Laser
+        </div>
+    </div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 500;
+
+        // Game variables
+        let score = 0;
+        let gameActive = false;
+        let gameOver = false;
+        let timeRemaining = 120; // 2 minutes in seconds
+
+        // Shovel properties
+        const shovel = {
+            x: 100,
+            y: canvas.height / 2,
+            width: 70,
+            height: 15,
+            speed: 5,
+            velY: 0,
+            baseSpeed: 3,
+            maxSpeed: 8
+        };
+
+        // Laser properties
+        const laser = {
+            active: false,
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 5,
+            duration: 0
+        };
+
+        // Obstacle properties
+        const obstacles = [];
+        const obstacleTypes = [
+            { width: 50, height: 100, color: '#8B4513' },  // Stalagmite
+            { width: 50, height: 100, color: '#8B4513' },  // Stalactite
+            { width: 60, height: 60, color: '#A0522D' },   // Rock
+            { width: 70, height: 30, color: '#555' },      // Wide rock
+            { width: 30, height: 120, color: '#654321' },  // Tall stalactite
+            { width: 40, height: 40, color: '#964B00' }    // Small rock
+        ];
+
+        // Cave properties
+        const caveDetail = [];
+        const caveSegmentWidth = 50;
+        const numCaveSegments = Math.ceil(canvas.width / caveSegmentWidth) + 1;
+
+        // Control flags
+        const keys = {
+            up: false,
+            down: false,
+            left: false,
+            right: false,
+            space: false
+        };
+
+        // End game animation
+        const endAnimation = {
+            active: false,
+            frame: 0,
+            maxFrames: 180, // 3 seconds at 60fps
+            guyX: canvas.width + 100,
+            guyY: canvas.height / 2,
+            danceState: 0,
+            danceTime: 0
+        };
+
+        // Initialize game
+        function init() {
+            score = 0;
+            timeRemaining = 120; // 2 minutes
+            updateScoreDisplay();
+            updateTimerDisplay();
+            
+            shovel.y = canvas.height / 2;
+            shovel.velY = 0;
+            shovel.speed = 3;
+            
+            obstacles.length = 0;
+            
+            // Generate initial cave structure
+            generateCave();
+            
+            gameActive = true;
+            gameOver = false;
+            endAnimation.active = false;
+            
+            document.getElementById('game-over').style.display = 'none';
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Generate cave walls
+        function generateCave() {
+            caveDetail.length = 0;
+            
+            let topY = 80;
+            let bottomY = canvas.height - 80;
+            
+            for (let i = 0; i < numCaveSegments + 10; i++) {
+                // Ensure cave doesn't get too narrow
+                if (bottomY - topY < 120) {  // Narrower minimum passage
+                    if (Math.random() < 0.5) {
+                        topY -= 20;
+                    } else {
+                        bottomY += 20;
+                    }
+                }
+                
+                // More dramatic variations
+                topY += Math.random() * 30 - 15;
+                bottomY += Math.random() * 30 - 15;
+                
+                // Occasional sharp changes
+                if (Math.random() < 0.2) {
+                    if (Math.random() < 0.5) {
+                        topY += Math.random() * 40 - 10; // More likely to go down
+                    } else {
+                        bottomY -= Math.random() * 40 - 10; // More likely to go up
+                    }
+                }
+                
+                // Keep within canvas bounds but allow more extreme walls
+                topY = Math.max(40, Math.min(canvas.height / 2.5, topY));
+                bottomY = Math.max(canvas.height / 1.7, Math.min(canvas.height - 40, bottomY));
+                
+                caveDetail.push({
+                    x: i * caveSegmentWidth,
+                    topY: topY,
+                    bottomY: bottomY
+                });
+            }
+        }
+
+        // Generate obstacles
+        function generateObstacle() {
+            if (obstacles.length > 20) return; // Increased max obstacles
+            
+            const lastSegment = caveDetail[caveDetail.length - 1];
+            const obstacleType = obstacleTypes[Math.floor(Math.random() * obstacleTypes.length)];
+            
+            // Position obstacle either on top or bottom of cave, or floating
+            const positionType = Math.random();
+            const x = canvas.width + Math.random() * 100;
+            let y;
+            let isTop = false;
+            let isFloating = false;
+            
+            if (positionType < 0.4) {
+                // Top obstacle
+                isTop = true;
+                y = lastSegment.topY + obstacleType.height / 2;
+            } else if (positionType < 0.8) {
+                // Bottom obstacle
+                y = lastSegment.bottomY - obstacleType.height / 2;
+            } else {
+                // Floating obstacle in middle
+                isFloating = true;
+                const availableSpace = lastSegment.bottomY - lastSegment.topY;
+                y = lastSegment.topY + (availableSpace * (0.3 + Math.random() * 0.4));
+            }
+            
+            // Add some variation to obstacle appearance
+            const randomColor = adjustColor(obstacleType.color, -20 + Math.random() * 40);
+            
+            obstacles.push({
+                x: x,
+                y: y,
+                width: obstacleType.width * (0.8 + Math.random() * 0.4),
+                height: obstacleType.height * (0.8 + Math.random() * 0.4),
+                color: randomColor,
+                isTop: isTop,
+                isFloating: isFloating
+            });
+        }
+        
+        // Helper function to adjust color brightness
+        function adjustColor(hex, amount) {
+            let r = parseInt(hex.substring(1, 3), 16);
+            let g = parseInt(hex.substring(3, 5), 16);
+            let b = parseInt(hex.substring(5, 7), 16);
+            
+            r = Math.max(0, Math.min(255, r + amount));
+            g = Math.max(0, Math.min(255, g + amount));
+            b = Math.max(0, Math.min(255, b + amount));
+            
+            return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+        }
+
+        // Handle key presses
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp') keys.up = true;
+            if (e.key === 'ArrowDown') keys.down = true;
+            if (e.key === 'ArrowLeft') keys.left = true;
+            if (e.key === 'ArrowRight') keys.right = true;
+            if (e.key === ' ') keys.space = true;
+            
+            // Prevent scrolling with arrow keys
+            if(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+                e.preventDefault();
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowUp') keys.up = false;
+            if (e.key === 'ArrowDown') keys.down = false;
+            if (e.key === 'ArrowLeft') keys.left = false;
+            if (e.key === 'ArrowRight') keys.right = false;
+            if (e.key === ' ') keys.space = false;
+        });
+
+        // Update game state
+        function update() {
+            if (!gameActive) return;
+            
+            // Update timer
+            if (timeRemaining > 0) {
+                timeRemaining -= 1/60; // Decrease by 1/60th of a second (assuming 60fps)
+                updateTimerDisplay();
+                
+                if (timeRemaining <= 0) {
+                    timeRemaining = 0;
+                    startEndAnimation();
+                }
+            }
+            
+            // Handle end animation
+            if (endAnimation.active) {
+                updateEndAnimation();
+                return;
+            }
+            
+            // Handle shovel movement
+            if (keys.up) {
+                shovel.velY = -shovel.speed;
+            } else if (keys.down) {
+                shovel.velY = shovel.speed;
+            } else {
+                shovel.velY *= 0.9; // Dampen movement
+            }
+            
+            // Handle speed adjustments
+            if (keys.left) {
+                shovel.baseSpeed = Math.max(1, shovel.baseSpeed - 0.05);
+            } else if (keys.right) {
+                shovel.baseSpeed = Math.min(shovel.maxSpeed, shovel.baseSpeed + 0.05);
+            }
+            
+            // Update shovel position
+            shovel.y += shovel.velY;
+            
+            // Contain shovel in game area
+            const currentSegment = caveDetail.find(segment => 
+                segment.x <= shovel.x && segment.x + caveSegmentWidth > shovel.x);
+                
+            if (currentSegment) {
+                // Keep within cave bounds
+                shovel.y = Math.max(
+                    currentSegment.topY + shovel.height/2, 
+                    Math.min(currentSegment.bottomY - shovel.height/2, shovel.y)
+                );
+            } else {
+                // Fallback bounds
+                shovel.y = Math.max(
+                    shovel.height/2, 
+                    Math.min(canvas.height - shovel.height/2, shovel.y)
+                );
+            }
+            
+            // Handle laser
+            if (keys.space && !laser.active) {
+                laser.active = true;
+                laser.x = shovel.x + shovel.width/2;
+                laser.y = shovel.y;
+                laser.duration = 15; // Laser lasts for 15 frames
+            }
+            
+            if (laser.active) {
+                laser.duration--;
+                if (laser.duration <= 0) {
+                    laser.active = false;
+                }
+            }
+            
+            // Update obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= shovel.baseSpeed;
+                
+                // Remove off-screen obstacles
+                if (obstacles[i].x + obstacles[i].width/2 < 0) {
+                    obstacles.splice(i, 1);
+                    score += 10;
+                    updateScoreDisplay();
+                    continue;
+                }
+                
+                // Check collision with laser
+                if (laser.active && 
+                    obstacles[i].x - obstacles[i].width/2 < laser.x + laser.width &&
+                    obstacles[i].x + obstacles[i].width/2 > laser.x &&
+                    obstacles[i].y - obstacles[i].height/2 < laser.y + laser.height/2 &&
+                    obstacles[i].y + obstacles[i].height/2 > laser.y - laser.height/2) {
+                    obstacles.splice(i, 1);
+                    score += 20;
+                    updateScoreDisplay();
+                    continue;
+                }
+                
+                // Check collision with shovel
+                if (!endAnimation.active &&
+                    obstacles[i].x - obstacles[i].width/2 < shovel.x + shovel.width/2 &&
+                    obstacles[i].x + obstacles[i].width/2 > shovel.x - shovel.width/2 &&
+                    obstacles[i].y - obstacles[i].height/2 < shovel.y + shovel.height/2 &&
+                    obstacles[i].y + obstacles[i].height/2 > shovel.y - shovel.height/2) {
+                    startEndAnimation();
+                    return;
+                }
+            }
+            
+            // Scroll cave
+            for (let i = 0; i < caveDetail.length; i++) {
+                caveDetail[i].x -= shovel.baseSpeed;
+            }
+            
+            // Generate new cave segments as needed
+            if (caveDetail[0].x <= -caveSegmentWidth) {
+                caveDetail.shift();
+                
+                const lastSegment = caveDetail[caveDetail.length - 1];
+                let newTopY = lastSegment.topY + (Math.random() * 30 - 15);
+                let newBottomY = lastSegment.bottomY + (Math.random() * 30 - 15);
+                
+                // Ensure cave doesn't get too narrow
+                if (newBottomY - newTopY < 150) {
+                    if (Math.random() < 0.5) {
+                        newTopY -= 20;
+                    } else {
+                        newBottomY += 20;
+                    }
+                }
+                
+                // Keep within canvas bounds
+                newTopY = Math.max(50, Math.min(canvas.height / 3, newTopY));
+                newBottomY = Math.max(canvas.height / 3 * 2, Math.min(canvas.height - 50, newBottomY));
+                
+                caveDetail.push({
+                    x: lastSegment.x + caveSegmentWidth,
+                    topY: newTopY,
+                    bottomY: newBottomY
+                });
+            }
+            
+            // More frequently generate obstacles
+            if (Math.random() < 0.03) {
+                generateObstacle();
+                
+                // Chance for cluster of obstacles
+                if (Math.random() < 0.3) {
+                    setTimeout(() => {
+                        if (gameActive && !endAnimation.active) {
+                            generateObstacle();
+                        }
+                    }, 200);
+                }
+            }
+            
+            // Increase score over time
+            score += shovel.baseSpeed * 0.1;
+            updateScoreDisplay();
+        }
+
+        function startEndAnimation() {
+            endAnimation.active = true;
+            endAnimation.frame = 0;
+            endAnimation.guyX = canvas.width + 100;
+        }
+
+        function updateEndAnimation() {
+            endAnimation.frame++;
+            
+            if (endAnimation.frame < 60) {
+                // Guy enters scene from right
+                endAnimation.guyX = canvas.width - (endAnimation.frame * 2);
+            } else if (endAnimation.frame === 70) {
+                // Shovel hits guy
+                shovel.x = endAnimation.guyX - 20;
+                shovel.y = endAnimation.guyY - 30;
+            } else if (endAnimation.frame > 70 && endAnimation.frame < 90) {
+                // Guy falls down
+                endAnimation.guyY += 5;
+            } else if (endAnimation.frame >= 90 && endAnimation.frame < 150) {
+                // Guy gets up and does a dance
+                if (endAnimation.frame === 90) {
+                    // Reset position for dance
+                    endAnimation.guyY = canvas.height / 2 + 30;
+                }
+                
+                // Dance animation
+                endAnimation.danceTime++;
+                endAnimation.danceState = Math.floor(endAnimation.danceTime / 5) % 4;
+                
+                // Move back and forth during dance
+                if (endAnimation.frame < 120) {
+                    endAnimation.guyX += Math.sin(endAnimation.frame / 5) * 3;
+                }
+            } else if (endAnimation.frame >= 150) {
+                // Show game over screen
+                showGameOver();
+            }
+        }
+
+        // Draw game elements
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw cave
+            ctx.fillStyle = '#654321'; // Cave color
+            
+            // Top cave wall
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            for (let i = 0; i < caveDetail.length; i++) {
+                if (caveDetail[i].x >= -caveSegmentWidth && caveDetail[i].x <= canvas.width) {
+                    ctx.lineTo(caveDetail[i].x, caveDetail[i].topY);
+                    ctx.lineTo(caveDetail[i].x + caveSegmentWidth, caveDetail[i].topY);
+                }
+            }
+            ctx.lineTo(canvas.width, 0);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Bottom cave wall
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height);
+            for (let i = 0; i < caveDetail.length; i++) {
+                if (caveDetail[i].x >= -caveSegmentWidth && caveDetail[i].x <= canvas.width) {
+                    ctx.lineTo(caveDetail[i].x + caveSegmentWidth, caveDetail[i].bottomY);
+                    ctx.lineTo(caveDetail[i].x, caveDetail[i].bottomY);
+                }
+            }
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Draw obstacles
+            obstacles.forEach(obstacle => {
+                ctx.fillStyle = obstacle.color;
+                
+                if (obstacle.isFloating) {
+                    // Draw floating rock as oval
+                    ctx.beginPath();
+                    ctx.ellipse(
+                        obstacle.x, 
+                        obstacle.y, 
+                        obstacle.width/2, 
+                        obstacle.height/2, 
+                        0, 0, Math.PI * 2
+                    );
+                    ctx.fill();
+                    
+                    // Add texture
+                    ctx.strokeStyle = adjustColor(obstacle.color, -30);
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.ellipse(
+                        obstacle.x - obstacle.width/6, 
+                        obstacle.y - obstacle.height/6, 
+                        obstacle.width/5, 
+                        obstacle.height/5, 
+                        0, 0, Math.PI * 2
+                    );
+                    ctx.stroke();
+                } else if (obstacle.isTop) {
+                    // Draw stalactite with pointed bottom
+                    ctx.beginPath();
+                    ctx.moveTo(obstacle.x - obstacle.width/2, obstacle.y - obstacle.height/2);
+                    ctx.lineTo(obstacle.x + obstacle.width/2, obstacle.y - obstacle.height/2);
+                    ctx.lineTo(obstacle.x, obstacle.y + obstacle.height/2);
+                    ctx.closePath();
+                    ctx.fill();
+                } else {
+                    // Draw stalagmite with pointed top
+                    ctx.beginPath();
+                    ctx.moveTo(obstacle.x - obstacle.width/2, obstacle.y + obstacle.height/2);
+                    ctx.lineTo(obstacle.x + obstacle.width/2, obstacle.y + obstacle.height/2);
+                    ctx.lineTo(obstacle.x, obstacle.y - obstacle.height/2);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                
+                // Add shadow for depth
+                ctx.fillStyle = 'rgba(0,0,0,0.2)';
+                if (obstacle.isFloating) {
+                    ctx.beginPath();
+                    ctx.ellipse(
+                        obstacle.x + 3, 
+                        obstacle.y + 3, 
+                        obstacle.width/2, 
+                        obstacle.height/2, 
+                        0, 0, Math.PI * 2
+                    );
+                    ctx.fill();
+                } else if (obstacle.isTop) {
+                    ctx.beginPath();
+                    ctx.moveTo(obstacle.x - obstacle.width/2 + 3, obstacle.y - obstacle.height/2 + 3);
+                    ctx.lineTo(obstacle.x + obstacle.width/2 + 3, obstacle.y - obstacle.height/2 + 3);
+                    ctx.lineTo(obstacle.x + 3, obstacle.y + obstacle.height/2 + 3);
+                    ctx.closePath();
+                    ctx.fill();
+                } else {
+                    ctx.beginPath();
+                    ctx.moveTo(obstacle.x - obstacle.width/2 + 3, obstacle.y + obstacle.height/2 + 3);
+                    ctx.lineTo(obstacle.x + obstacle.width/2 + 3, obstacle.y + obstacle.height/2 + 3);
+                    ctx.lineTo(obstacle.x + 3, obstacle.y - obstacle.height/2 + 3);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            });
+            
+            // Draw laser
+            if (laser.active) {
+                ctx.fillStyle = 'red';
+                ctx.fillRect(laser.x, laser.y - laser.height/2, laser.width, laser.height);
+                
+                // Add glow effect
+                ctx.shadowColor = 'red';
+                ctx.shadowBlur = 10;
+                ctx.fillRect(laser.x, laser.y - laser.height/2, laser.width, laser.height);
+                ctx.shadowBlur = 0;
+            }
+            
+            // Draw shovel
+            // Handle
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(
+                shovel.x - shovel.width/2, 
+                shovel.y - shovel.height/6, 
+                shovel.width/1.5, 
+                shovel.height/3
+            );
+            
+            // Shovel blade
+            ctx.fillStyle = '#AAA';
+            ctx.beginPath();
+            // Main blade
+            ctx.moveTo(shovel.x + shovel.width/4, shovel.y - shovel.height);
+            ctx.lineTo(shovel.x + shovel.width/2, shovel.y - shovel.height/2);
+            ctx.lineTo(shovel.x + shovel.width/2, shovel.y + shovel.height/2);
+            ctx.lineTo(shovel.x + shovel.width/4, shovel.y + shovel.height);
+            ctx.lineTo(shovel.x - shovel.width/4, shovel.y + shovel.height);
+            ctx.lineTo(shovel.x - shovel.width/4, shovel.y - shovel.height);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Metal connector
+            ctx.fillStyle = '#777';
+            ctx.fillRect(
+                shovel.x - shovel.width/4, 
+                shovel.y - shovel.height/6, 
+                shovel.width/2, 
+                shovel.height/3
+            );
+            
+            // Draw end animation if active
+            if (endAnimation.active) {
+                drawEndAnimation();
+            }
+        }
+
+        function drawEndAnimation() {
+            // Draw guy with backwards hat
+            const guyX = endAnimation.guyX;
+            const guyY = endAnimation.guyY;
+            
+            if (endAnimation.frame < 90) {
+                // Before dance
+                // Body
+                ctx.fillStyle = '#3366CC';
+                ctx.fillRect(guyX - 15, guyY, 30, 50);
+                
+                // Head
+                ctx.fillStyle = '#FFCC99';
+                ctx.beginPath();
+                ctx.arc(guyX, guyY - 15, 20, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Backwards hat
+                ctx.fillStyle = '#FF0000';
+                ctx.beginPath();
+                ctx.arc(guyX, guyY - 15, 20, Math.PI * 0.8, Math.PI * 2.2);
+                ctx.fill();
+                
+                // Hat bill facing backward
+                ctx.fillRect(guyX - 30, guyY - 25, 20, 10);
+                
+                // Face
+                if (endAnimation.frame < 70) {
+                    // Normal face before hit
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath();
+                    ctx.arc(guyX - 8, guyY - 20, 3, 0, Math.PI * 2); // Left eye
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.arc(guyX + 8, guyY - 20, 3, 0, Math.PI * 2); // Right eye
+                    ctx.fill();
+                    
+                    // Smile
+                    ctx.beginPath();
+                    ctx.arc(guyX, guyY - 10, 8, 0, Math.PI);
+                    ctx.stroke();
+                } else {
+                    // Face after being hit
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath();
+                    ctx.arc(guyX - 8, guyY - 20, 3, 0, Math.PI * 2); // Left eye as X
+                    ctx.moveTo(guyX - 5, guyY - 23);
+                    ctx.lineTo(guyX - 11, guyY - 17);
+                    ctx.moveTo(guyX - 11, guyY - 23);
+                    ctx.lineTo(guyX - 5, guyY - 17);
+                    ctx.stroke();
+                    
+                    ctx.beginPath();
+                    ctx.arc(guyX + 8, guyY - 20, 3, 0, Math.PI * 2); // Right eye as X
+                    ctx.moveTo(guyX + 5, guyY - 23);
+                    ctx.lineTo(guyX + 11, guyY - 17);
+                    ctx.moveTo(guyX + 11, guyY - 23);
+                    ctx.lineTo(guyX + 5, guyY - 17);
+                    ctx.stroke();
+                    
+                    // Frown
+                    ctx.beginPath();
+                    ctx.arc(guyX, guyY - 5, 8, Math.PI, Math.PI * 2);
+                    ctx.stroke();
+                }
+            } else if (endAnimation.frame < 150) {
+                // Dancing animation
+                // Head with hat
+                ctx.fillStyle = '#FFCC99';
+                ctx.beginPath();
+                ctx.arc(guyX, guyY - 15, 20, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Backwards hat
+                ctx.fillStyle = '#FF0000';
+                ctx.beginPath();
+                ctx.arc(guyX, guyY - 15, 20, Math.PI * 0.8, Math.PI * 2.2);
+                ctx.fill();
+                
+                // Hat bill facing backward
+                ctx.fillRect(guyX - 30, guyY - 25, 20, 10);
+                
+                // Happy face (he recovered!)
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(guyX - 8, guyY - 20, 3, 0, Math.PI * 2); // Left eye
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(guyX + 8, guyY - 20, 3, 0, Math.PI * 2); // Right eye
+                ctx.fill();
+                
+                // Big smile
+                ctx.beginPath();
+                ctx.arc(guyX, guyY - 8, 10, 0, Math.PI);
+                ctx.stroke();
+
+                // Body changes based on dance state
+                ctx.fillStyle = '#3366CC';
+                
+                switch(endAnimation.danceState) {
+                    case 0: // Arms up
+                        // Body
+                        ctx.fillRect(guyX - 15, guyY, 30, 50);
+                        
+                        // Arms up
+                        ctx.fillRect(guyX - 25, guyY, 10, 30); // Left arm
+                        ctx.fillRect(guyX + 15, guyY, 10, 30); // Right arm
+                        
+                        // Left leg straight
+                        ctx.fillRect(guyX - 10, guyY + 50, 10, 30);
+                        // Right leg straight
+                        ctx.fillRect(guyX, guyY + 50, 10, 30);
+                        break;
+                        
+                    case 1: // Arms out
+                        // Body
+                        ctx.fillRect(guyX - 15, guyY, 30, 50);
+                        
+                        // Arms out
+                        ctx.fillRect(guyX - 45, guyY + 10, 30, 10); // Left arm
+                        ctx.fillRect(guyX + 15, guyY + 10, 30, 10); // Right arm
+                        
+                        // Left leg bent
+                        ctx.fillRect(guyX - 15, guyY + 50, 10, 20);
+                        ctx.fillRect(guyX - 25, guyY + 70, 20, 10);
+                        
+                        // Right leg bent
+                        ctx.fillRect(guyX + 5, guyY + 50, 10, 20);
+                        ctx.fillRect(guyX + 5, guyY + 70, 20, 10);
+                        break;
+                        
+                    case 2: // Disco pose
+                        // Body tilted
+                        ctx.save();
+                        ctx.translate(guyX, guyY + 25);
+                        ctx.rotate(Math.PI * 0.05);
+                        ctx.fillRect(-15, -25, 30, 50);
+                        ctx.restore();
+                        
+                        // Right arm up
+                        ctx.save();
+                        ctx.translate(guyX, guyY);
+                        ctx.rotate(Math.PI * -0.25);
+                        ctx.fillRect(15, -10, 40, 10);
+                        ctx.restore();
+                        
+                        // Left arm down
+                        ctx.save();
+                        ctx.translate(guyX, guyY);
+                        ctx.rotate(Math.PI * 0.15);
+                        ctx.fillRect(-45, 20, 30, 10);
+                        ctx.restore();
+                        
+                        // Legs in dance position
+                        ctx.fillRect(guyX - 20, guyY + 50, 10, 30); // Left leg out
+                        ctx.fillRect(guyX + 5, guyY + 50, 10, 30);  // Right leg
+                        break;
+                        
+                    case 3: // Jump
+                        // Body higher
+                        ctx.fillRect(guyX - 15, guyY - 10, 30, 50);
+                        
+                        // Arms at angle
+                        ctx.save();
+                        ctx.translate(guyX, guyY);
+                        ctx.rotate(Math.PI * 0.25);
+                        ctx.fillRect(-40, 0, 30, 10);  // Left arm up
+                        ctx.restore();
+                        
+                        ctx.save();
+                        ctx.translate(guyX, guyY);
+                        ctx.rotate(Math.PI * -0.25);
+                        ctx.fillRect(10, 0, 30, 10);  // Right arm up
+                        ctx.restore();
+                        
+                        // Legs bent for jump
+                        ctx.fillRect(guyX - 15, guyY + 40, 10, 15); // Left thigh
+                        ctx.fillRect(guyX - 15, guyY + 55, 15, 10); // Left calf
+                        
+                        ctx.fillRect(guyX + 5, guyY + 40, 10, 15);  // Right thigh
+                        ctx.fillRect(guyX, guyY + 55, 15, 10);      // Right calf
+                        break;
+                }
+                
+                // Draw stars around him while dancing
+                drawStars(guyX, guyY);
+            }
+            
+            // Display "Game Over" text if animation is complete
+            if (endAnimation.frame >= 150) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.font = 'bold 48px Arial';
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over', canvas.width/2, canvas.height/2);
+                
+                showGameOver();
+            }
+        }
+        
+        // Draw stars for dance animation
+        function drawStars(x, y) {
+            const starCount = 5;
+            const radius = 80;
+            
+            ctx.fillStyle = 'yellow';
+            
+            for (let i = 0; i < starCount; i++) {
+                const angle = (endAnimation.danceTime / 10) + (i * (Math.PI * 2 / starCount));
+                const starX = x + Math.cos(angle) * radius;
+                const starY = y + Math.sin(angle) * radius;
+                
+                // Draw star
+                ctx.beginPath();
+                for (let j = 0; j < 5; j++) {
+                    const starAngle = j * Math.PI * 2 / 5 - Math.PI / 2;
+                    const length = (j % 2 === 0) ? 10 : 5;
+                    const pointX = starX + Math.cos(starAngle) * length;
+                    const pointY = starY + Math.sin(starAngle) * length;
+                    
+                    if (j === 0) {
+                        ctx.moveTo(pointX, pointY);
+                    } else {
+                        ctx.lineTo(pointX, pointY);
+                    }
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+
+        // Show game over screen
+        function showGameOver() {
+            gameActive = false;
+            gameOver = true;
+            
+            document.getElementById('final-score').textContent = Math.floor(score);
+            document.getElementById('game-over').style.display = 'block';
+        }
+
+        // Update score display
+        function updateScoreDisplay() {
+            document.getElementById('score').textContent = Math.floor(score);
+        }
+
+        // Update timer display
+        function updateTimerDisplay() {
+            const minutes = Math.floor(timeRemaining / 60);
+            const seconds = Math.floor(timeRemaining % 60);
+            document.getElementById('timer').textContent = 
+                `${minutes}:${seconds < 10 ? '0' + seconds : seconds}`;
+        }
+
+        // Game loop
+        function gameLoop() {
+            update();
+            draw();
+            
+            if (gameActive) {
+                requestAnimationFrame(gameLoop);
+            }
+        }
+
+        // Start game on page load
+        window.onload = function() {
+            document.getElementById('restart-button').addEventListener('click', init);
+            init();
+        };
+    </script>
+</body>
+</html>
